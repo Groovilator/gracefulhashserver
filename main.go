@@ -10,23 +10,50 @@ import (
 	"time"
 )
 
-func makeHashHandler(wg *sync.WaitGroup) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		wg.Add(1)
-		defer wg.Done()
-		fmt.Println("Received Hash Request")
+type GracefulListener struct {
+	net.Listener
+	wg *sync.WaitGroup
+}
 
-		r.ParseForm()
-		x := r.Form.Get("password")
+type GracefulConn struct {
+	net.Conn
+	wg *sync.WaitGroup
+}
 
-		time.Sleep(5 * time.Second)
+func NewGracefulListener(l net.Listener) (*GracefulListener) {
+	return &GracefulListener{Listener: l, wg: &sync.WaitGroup{}}
+}
 
-		sha_512 := sha512.New()
-		sha_512.Write([]byte(x))
+func NewGracefulConn(wg *sync.WaitGroup, conn net.Conn) *GracefulConn {
+	return &GracefulConn{Conn: conn, wg: wg}
+}
 
-		fmt.Fprintf(w, base64.URLEncoding.EncodeToString(sha_512.Sum(nil)))
-		fmt.Println("Returning Hash Response")
+func (gl *GracefulListener) Accept() (net.Conn, error) {
+	conn, err := gl.Listener.Accept()
+	if err == nil {
+		sl.wg.Add(1)
 	}
+	return NewGracefulConn(gl.wg, conn), err
+}
+
+func (gconn *GracefulConn) Close() error {
+	gconn.wg.Done()
+	return gconn.Conn.Close()
+}
+
+func hashHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Received hash request")
+
+	r.ParseForm()
+	pass := r.Form.Get("password")
+
+	time.Sleep(5 * time.Second)
+
+	sha_512 := sha512.New()
+	sha_512.Write([]byte(pass))
+
+	fmt.Fprintf(w, base64.StdEncoding.EncodeToString(sha_512.Sum(nil)))
+	fmt.Println("Returning hash")
 }
 
 func main() {
@@ -34,22 +61,19 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	var wg sync.WaitGroup
-
-	hashHandler := makeHashHandler(&wg)
+	gl := NewGracefulListener(clumsyListener)
 
 	http.HandleFunc("/", hashHandler)
 	http.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("*Shutdown Started*")
 		fmt.Printf("Closing listener\n")
-		clumsyListener.Close()
+		gl.Close()
 	})
 	server := http.Server{}
 
 	fmt.Println("*Serving HTTP*")
-	server.Serve(clumsyListener)
+	server.Serve(gl)
 
 	fmt.Println("Waiting on pending responses")
-	wg.Wait()
+	gl.wg.Wait()
 }
