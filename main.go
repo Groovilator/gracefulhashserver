@@ -35,7 +35,7 @@ func NewGracefulConn(wg *sync.WaitGroup, conn net.Conn) *GracefulConn {
 func (gl *GracefulListener) Accept() (net.Conn, error) {
 	conn, err := gl.Listener.Accept()
 	if err == nil {
-		sl.wg.Add(1)
+		gl.wg.Add(1)
 	}
 	return NewGracefulConn(gl.wg, conn), err
 }
